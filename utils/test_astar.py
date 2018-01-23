@@ -10,3 +10,12 @@ ds = DStar(graph, 5, 4, (0, 0), (4, 3), debug=False)
 a, b = ds.search()
 print(a)
 print(b)
+
+
+ds = DStar([], 548, 421, (142, 328), (125, 375))
+print('Start: {}'.format(ds.tuple_to_array(142, 328)))
+print('Goal: {}'.format(ds.tuple_to_array(125, 375)))
+print()
+print(ds.array_to_tuple(180408))
+print(ds.array_to_tuple(179860))
+

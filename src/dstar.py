@@ -1,5 +1,5 @@
 import array
-import queue
+import heapq
 import time
 import os
 
@@ -25,19 +25,20 @@ class AStar:
         self.visited = [False for i in range(self.node_count)]
         self.parent = [None for i in range(self.node_count)]
         self.cost = [-1 for i in range(self.node_count)]
-        self.cost[self.start_index] = 0
 
-        self.frontier = queue.PriorityQueue()   # (priority, node)
-        self.frontier.put((0.0, self.start_index))
+        self.visited[self.start_index] = True
+        self.cost[self.start_index] = 0
+        self.frontier = [(0, self.start_index)]   # (priority, node)
+        heapq.heapify(self.frontier)
 
         self.heuristic_constant = self.get_heuristic_constant()
 
     def get_heuristic_constant(self):
-        sum = 0.00
+        sum = 0
         for g in self.graph:
             if g >= 0:
                 sum += g
-        return sum / self.node_count
+        return int(sum/self.node_count)
 
     def tuple_to_array(self, xcoor, ycoor):
         return ycoor * self.xsize + xcoor
@@ -48,13 +49,13 @@ class AStar:
     def get_neighbors(self, main):
 
         def north_exists():
-            return north > -1 and self.graph[north] >= 0
+            return north > -1 and self.graph[north] > -1
         def south_exists():
-            return south < self.node_count and self.graph[south] >= 0
+            return south < self.node_count and self.graph[south] > -1
         def east_exists():
-            return east < self.node_count and main % self.xsize != self.xsize - 1 and self.graph[east] >= 0
+            return east < self.node_count and main % self.xsize != self.xsize - 1 and self.graph[east] > -1
         def west_exists():
-            return west > -1 and main % self.xsize != 0 and self.graph[west] >= 0
+            return west > -1 and main % self.xsize != 0 and self.graph[west] > -1
 
         # hopefully main is an int of range [0, self.node_count)
         # but adding a check wastes time
@@ -86,9 +87,9 @@ class AStar:
 
     def search(self):
 
-        while not self.frontier.empty():
+        while self.frontier:
 
-            priority, current = self.frontier.get()
+            priority, current = heapq.heappop(self.frontier)
             if current == self.goal_index:
                 break
 
@@ -102,14 +103,22 @@ class AStar:
                     self.cost[next] = new_cost
                     self.parent[next] = current
                     priority = new_cost + self.heuristic(next)
-                    self.frontier.put((priority, next))
+                    for node in self.frontier:
+                        if node[1] == next:
+                            node[0] = priority
+                            heapq.heapify(self.frontier)
+                            break
+                    else:
+                        heapq.heappush(self.frontier, (priority, next))
 
             self.visited[current] = True
             #self.illustrate()
 
         if self.DEBUG:
+            print(self.frontier)
             for i in range(self.node_count):
-                print(i, self.parent[i], self.cost[i])
+                if self.parent[i]:
+                    print(i, self.parent[i], self.cost[i])
             self.illustrate()
 
         return self.final_path(), self.cost[self.goal_index]
@@ -118,18 +127,23 @@ class AStar:
 
         path = []
         node = self.goal_index
-        while node != self.start_index:
+        while node and node != self.start_index:
             path.append(node)
             node = self.parent[node]
-        path.append(node)
         return path
 
     def illustrate(self):
 
         row = 0
-        for v in self.visited:
-            if v:
+        for i, v in enumerate(self.visited):
+            if i == self.start_index:
+                print('o', end='')
+            elif i == self.goal_index:
+                print('+', end='')
+            elif v:
                 print('x', end='')
+            elif self.graph[i] < 0:
+                print('~', end='')
             else:
                 print('.', end='')
             row += 1
@@ -138,13 +152,13 @@ class AStar:
                 print()
 
         # if self.DEBUG:
-            # for i in self.frontier.queue:
-                # print(i)
+            # # for i in self.frontier:
+                # # print(i)
             # time.sleep(2)
         # else:
             # time.sleep(0.2)
 
-        os.system('cls')
+        #os.system('cls')
 
 
 class DStar(AStar):
