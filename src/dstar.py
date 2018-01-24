@@ -3,34 +3,46 @@ import heapq
 import time
 import os
 
+
 class AStar:
 
     '''Subset of Graph, such that it is a graph whose edges are only with its
     4-adjacent neighbors.'''
 
-    def __init__(self, graph, xsize, ysize, start, goal, debug=False):
+    def __init__(self, xsize, ysize, start, goal, max_steps, debug=False):
 
-        self.graph = graph  # must be array.array('f')
         self.xsize = xsize
         self.ysize = ysize
         self.start_tuple = start
         self.goal_tuple = goal
+        self.max_steps_per_map = max_steps
         self.DEBUG = debug
 
+        self.max_steps_total = 0
         self.node_count = self.xsize * self.ysize
         self.start_index = self.tuple_to_array(start[0], start[1])
         self.goal_index = self.tuple_to_array(goal[0], goal[1])
 
-        #self.visited = array.array('b', [False for i in range(self.node_count)])
-        self.visited = [False for i in range(self.node_count)]
-        self.parent = [None for i in range(self.node_count)]
-        self.cost = [-1 for i in range(self.node_count)]
+        self.nodes = [{'parent': -1, 'cost': -1, 'steps': 0, 'visited': False} for i in range(self.node_count)]
+        '''
+        Cost: Probabilty of wind speed >= 15, range is [0, 100]
+        Steps: Number of nodes from start to current
+        Status:
+            0: NEW, meaning it has never been placed on the OPEN list
+            1: OPEN, meaning it is currently on the OPEN list
+            2: CLOSED, meaning it is no longer on the OPEN list
+            3: RAISE, indicating its cost is higher than the last time it was on the OPEN list
+            4: LOWER, indicating its cost is lower than the last time it was on the OPEN list
+        '''
 
-        self.visited[self.start_index] = True
-        self.cost[self.start_index] = 0
+        self.nodes[self.start_index]['cost'] = 0
+        self.nodes[self.start_index]['visited'] = True
         self.frontier = [(0, self.start_index)]   # (priority, node)
+        self.next_frontier = []
         heapq.heapify(self.frontier)
 
+    def set_graph(self, graph):
+        self.graph = graph
         self.heuristic_constant = self.get_heuristic_constant()
 
     def get_heuristic_constant(self):
@@ -49,13 +61,25 @@ class AStar:
     def get_neighbors(self, main):
 
         def north_exists():
-            return north > -1 and self.graph[north] > -1
+            try:
+                return north > -1 and self.graph[north] > -1
+            except:
+                return False
         def south_exists():
-            return south < self.node_count and self.graph[south] > -1
+            try:
+                return south < self.node_count and self.graph[south] > -1
+            except:
+                return False
         def east_exists():
-            return east < self.node_count and main % self.xsize != self.xsize - 1 and self.graph[east] > -1
+            try:
+                return east < self.node_count and main % self.xsize != self.xsize - 1 and self.graph[east] > -1
+            except:
+                return False
         def west_exists():
-            return west > -1 and main % self.xsize != 0 and self.graph[west] > -1
+            try:
+                return west > -1 and main % self.xsize != 0 and self.graph[west] > -1
+            except:
+                return False
 
         # hopefully main is an int of range [0, self.node_count)
         # but adding a check wastes time
@@ -85,62 +109,67 @@ class AStar:
         xcoor, ycoor = self.array_to_tuple(node)
         return (abs(self.goal_tuple[0] - xcoor) + abs(self.goal_tuple[1] - ycoor)) * self.heuristic_constant
 
-    def search(self):
+    def a_star_search(self):
 
         while self.frontier:
 
             priority, current = heapq.heappop(self.frontier)
+            self.nodes[current]['visited'] = True
+
             if current == self.goal_index:
                 break
+            if self.nodes[current]['steps'] == self.max_steps_total:
+                continue
 
             for next in self.get_neighbors(current):
 
-                if self.visited[next]:
-                    continue
+                new_cost = self.nodes[current]['cost'] + self.get_cost(current, next)
 
-                new_cost = self.cost[current] + self.get_cost(current, next)
-                if self.cost[next] < 0 or self.cost[next] > new_cost:
-                    self.cost[next] = new_cost
-                    self.parent[next] = current
+                if self.nodes[next]['cost'] < 0 or self.nodes[next]['cost'] > new_cost:
+
+                    self.nodes[next]['cost'] = new_cost
+                    self.nodes[next]['parent'] = current
+                    self.nodes[next]['steps'] = self.nodes[current]['steps'] + 1
                     priority = new_cost + self.heuristic(next)
-                    for node in self.frontier:
-                        if node[1] == next:
-                            node[0] = priority
+
+                    for f in self.frontier:
+                        if f[1] == next:
+                            f = (priority, next)
                             heapq.heapify(self.frontier)
                             break
                     else:
                         heapq.heappush(self.frontier, (priority, next))
 
-            self.visited[current] = True
             #self.illustrate()
 
         if self.DEBUG:
             print(self.frontier)
-            for i in range(self.node_count):
-                if self.parent[i]:
-                    print(i, self.parent[i], self.cost[i])
+            # for i in range(self.node_count):
+                # if self.nodes[i]['parent']:
+                    # print(i, self.nodes[i])
             self.illustrate()
 
-        return self.final_path(), self.cost[self.goal_index]
+        # if cost is -1, goal was not reached
+        return self.final_path(), self.nodes[self.goal_index]['cost']
 
     def final_path(self):
 
         path = []
-        node = self.goal_index
-        while node and node != self.start_index:
-            path.append(node)
-            node = self.parent[node]
+        idx = self.goal_index
+        while idx >= 0 and idx != self.start_index:
+            path.append(idx)
+            idx = self.nodes[idx]['parent']
         return path
 
     def illustrate(self):
 
         row = 0
-        for i, v in enumerate(self.visited):
+        for i in range(self.node_count):
             if i == self.start_index:
                 print('o', end='')
             elif i == self.goal_index:
                 print('+', end='')
-            elif v:
+            elif self.nodes[i]['visited']:
                 print('x', end='')
             elif self.graph[i] < 0:
                 print('~', end='')
@@ -151,15 +180,39 @@ class AStar:
                 row = 0
                 print()
 
-        # if self.DEBUG:
-            # # for i in self.frontier:
-                # # print(i)
-            # time.sleep(2)
-        # else:
-            # time.sleep(0.2)
+        if self.DEBUG:
+            for i in self.frontier:
+                print(i)
+            time.sleep(2)
+        else:
+            time.sleep(0.2)
 
-        #os.system('cls')
+        os.system('cls')
 
 
 class DStar(AStar):
-    pass
+
+    def __init__(self, graph_set, *args, **kwargs):
+
+        super(DStar, self).__init__(*args, **kwargs)
+        self.graph_set = graph_set
+
+    def d_star_search(self):
+
+        for i, ggg in enumerate(self.graph_set):
+
+            print('Map Change to {}'.format(i + 3))
+            self.set_graph(ggg)
+            self.max_steps_total += self.max_steps_per_map
+
+            for i in range(self.node_count):
+                if self.nodes[i]['visited'] and self.graph[i] >= 0:
+                    priority = self.nodes[i]['cost'] + self.heuristic(i)
+                    heapq.heappush(self.frontier, (priority, i))
+
+            path, cost = self.a_star_search()
+
+            if cost >= 0:
+                break
+
+        return path, cost
