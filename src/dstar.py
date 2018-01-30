@@ -14,49 +14,50 @@ class AStar:
     '''Subset of Graph, such that it is a graph whose edges are only with its
     4-adjacent neighbors.'''
 
-    def __init__(self, xsize, ysize, start, goal, max_steps, file_name, debug=False):
+    def __init__(self, xsize, ysize, start, goal, max_steps, file_prefix, debug=False):
 
         self.xsize = xsize
         self.ysize = ysize
         self.start_tuple = start
         self.goal_tuple = goal
         self.max_steps_per_map = max_steps
-        self.file_name = file_name
+        self.file_prefix = file_prefix
         self.DEBUG = debug
 
-        #self.max_steps_total = 0
         self.node_count = self.xsize * self.ysize
         self.start_index = self.tuple_to_array(start[0], start[1])
         self.goal_index = self.tuple_to_array(goal[0], goal[1])
 
-        self.nodes = [{'parent': -1, 'cost': -1, 'steps': 0, 'max_steps': -1, 'visited': False, 'first_map': -1} for i in range(self.node_count)]
-        '''
-        Cost: Probabilty of wind speed >= 15, range is [0, 100]
-        Steps: Number of nodes from start to current
-        Status:
-            0: NEW, meaning it has never been placed on the OPEN list
-            1: OPEN, meaning it is currently on the OPEN list
-            2: CLOSED, meaning it is no longer on the OPEN list
-            3: RAISE, indicating its cost is higher than the last time it was on the OPEN list
-            4: LOWER, indicating its cost is lower than the last time it was on the OPEN list
-        '''
+    def reset(self):
 
-        self.nodes[self.start_index]['cost'] = 0
+        self.nodes = [
+            {
+                'map': -1,
+                'max_steps': -1,
+                'parent': -1,
+                'steps': 0,
+                'total_cost': -1,
+                'visited': False,
+            }
+            for i in range(self.node_count)
+        ]
         self.nodes[self.start_index]['visited'] = True
         self.nodes[self.start_index]['max_steps'] = self.max_steps_per_map
         self.frontier = [(0, self.start_index)]   # (priority, node)
-        self.next_frontier = []
-        heapq.heapify(self.frontier)
 
     def set_graph(self, graph):
         self.graph = graph
         self.heuristic_constant = self.get_heuristic_constant()
+        if self.nodes[self.start_index]['total_cost'] < 0:
+            self.nodes[self.start_index]['total_cost'] = self.graph[self.start_index]
+
+    def set_threshold(self, threshold):
+        self.threshold = threshold
 
     def get_heuristic_constant(self):
         sum = 0
         for g in self.graph:
-            if g >= 0:
-                sum += g
+            sum += g
         return int(sum/self.node_count)
 
     def tuple_to_array(self, xcoor, ycoor):
@@ -69,22 +70,22 @@ class AStar:
 
         def north_exists():
             try:
-                return north > -1 and self.graph[north] > -1
+                return north > -1 and self.graph[north] <= self.threshold
             except:
                 return False
         def south_exists():
             try:
-                return south < self.node_count and self.graph[south] > -1
+                return south < self.node_count and self.graph[south] <= self.threshold
             except:
                 return False
         def east_exists():
             try:
-                return east < self.node_count and main % self.xsize != self.xsize - 1 and self.graph[east] > -1
+                return east < self.node_count and main % self.xsize != self.xsize - 1 and self.graph[east] <= self.threshold
             except:
                 return False
         def west_exists():
             try:
-                return west > -1 and main % self.xsize != 0 and self.graph[west] > -1
+                return west > -1 and main % self.xsize != 0 and self.graph[west] <= self.threshold
             except:
                 return False
 
@@ -122,23 +123,20 @@ class AStar:
 
             priority, current = heapq.heappop(self.frontier)
             self.nodes[current]['visited'] = True
-            if self.nodes[current]['first_map'] < 0: 
-                self.nodes[current]['first_map'] = map_number
+            self.nodes[current]['map'] = map_number
 
             if current == self.goal_index:
                 break
-            if self.nodes[current]['max_steps'] < 0:
-                raise Exception('Uh what?')
             if self.nodes[current]['steps'] >= self.nodes[current]['max_steps']:
                 continue
 
             for next in self.get_neighbors(current):
 
-                new_cost = self.nodes[current]['cost'] + self.get_cost(current, next)
+                new_cost = self.nodes[current]['total_cost'] + self.get_cost(current, next)
 
-                if self.nodes[next]['cost'] < 0 or self.nodes[next]['cost'] > new_cost:
+                if self.nodes[next]['total_cost'] < 0 or self.nodes[next]['total_cost'] > new_cost:
 
-                    self.nodes[next]['cost'] = new_cost
+                    self.nodes[next]['total_cost'] = new_cost
                     self.nodes[next]['parent'] = current
                     self.nodes[next]['max_steps'] = self.nodes[current]['max_steps']
                     self.nodes[next]['steps'] = self.nodes[current]['steps'] + 1
@@ -154,8 +152,8 @@ class AStar:
 
         self.illustrate(map_number)
 
-        # if cost is -1, goal was not reached
-        return self.final_path(), self.nodes[self.goal_index]['cost']
+        # if total_cost is -1, goal was not reached
+        return self.final_path(), self.nodes[self.goal_index]['total_cost']
 
     def final_path(self):
 
@@ -168,23 +166,19 @@ class AStar:
 
     def illustrate(self, map_number):
 
-        full_path = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)),
-            '{}_Hour{}.txt'.format(self.file_name, str(map_number).zfill(2)),
-        )
-
-        with open(full_path, 'w') as f:
+        file_path = self.file_prefix + '_Threshold{}_Hour{}.txt'.format(self.threshold, map_number)
+        with open(file_path, 'w') as f:
             row = 0
             for i in range(self.node_count):
                 if i == self.start_index:
                     f.write('o ')
                 elif i == self.goal_index:
                     f.write('+ ')
-                elif self.nodes[i]['visited'] and self.graph[i] < 0:
+                elif self.nodes[i]['visited'] and self.graph[i] > self.threshold:
                     f.write('# ')
                 elif self.nodes[i]['visited']:
                     f.write('x ')
-                elif self.graph[i] < 0:
+                elif self.graph[i] > self.threshold:
                     f.write('~ ')
                 else:
                     f.write('. ')
@@ -193,41 +187,92 @@ class AStar:
                     row = 0
                     f.write('\n')
 
-        # if self.DEBUG:
-            # for i in self.frontier:
-                # print(i)
-            # time.sleep(2)
-        # else:
-            # time.sleep(0.2)
-
-        #os.system('cls')
-
 
 class DStar(AStar):
 
-    def __init__(self, graph_set, *args, **kwargs):
+    def __init__(self, graph_set, max_cost, threshold_increment, *args, **kwargs):
 
         super(DStar, self).__init__(*args, **kwargs)
         self.graph_set = graph_set
+        self.max_cost = max_cost
+        self.threshold_increment = threshold_increment
         self.last_time = datetime.datetime.now().replace(microsecond=0)
 
-    def d_star_search(self):
+    def write_path(self, path, cost):
 
+        file_path = self.file_prefix + '_PATH_T{}.csv'.format(self.threshold)
+        print('Path found! Writing path to {}'.format(file_path))
+
+        with open(file_path, 'w') as f:
+
+            f.write('Cost: {}\n'.format(cost))
+            f.write('Threshold: {}/{}\n'.format(self.threshold, self.max_cost))
+            f.write('index,xcoor,ycoor,map,node_cost,total_cost,parent,steps\n')
+
+            for idx, node_info in path:
+                xcoor, ycoor = self.array_to_tuple(idx)
+                f.write(','.join((
+                    str(idx),
+                    str(xcoor),
+                    str(ycoor),
+                    str(node_info['map']),
+                    str(self.graph_set[node_info['map']-3][idx]),
+                    str(node_info['total_cost']),
+                    str(node_info['parent']),
+                    str(node_info['steps']),
+                )))
+                f.write('\n')
+
+    def _d_star_search(self):
+    
         for i, ggg in enumerate(self.graph_set):
 
-            print('Map Change to {}'.format(i + 3))
+            print('Map change to {}'.format(i + 3))
             self.set_graph(ggg)
 
             for n in range(self.node_count):
                 if self.nodes[n]['visited'] and self.graph[n] >= 0:
                     self.nodes[n]['max_steps'] = self.nodes[n]['steps'] + self.max_steps_per_map
-                    priority = self.nodes[n]['cost'] + self.heuristic(n)
+                    priority = self.nodes[n]['total_cost'] + self.heuristic(n)
                     heapq.heappush(self.frontier, (priority, n))
 
             path, cost = self.a_star_search(i + 3)
-            #self.last_time = get_time(self.last_time)
+            self.last_time = get_time(self.last_time)
 
             if cost >= 0:
-                break
+                return path, cost
 
         return path, cost
+
+    def d_star_search(self):
+
+        threshold = self.threshold_increment
+        final_try = False
+
+        while threshold < self.max_cost:
+
+            print('Threshold set to {}'.format(threshold))
+            self.set_threshold(threshold)
+            self.reset()
+
+            path, cost = self._d_star_search()
+
+            if cost >= 0:
+                self.write_path(path, cost)
+
+                if not final_try and threshold + self.threshold_increment < self.max_cost:
+                    print('Try one more time with a higher threshold')
+                    final_try = True
+                    threshold += self.threshold_increment
+                    self.reset()
+                    continue
+
+            if final_try:
+                if cost < 0:
+                    print('Path not found with higher threshold')
+                return
+
+            print('Path not found, retrying with higher threshold')
+            threshold += self.threshold_increment
+
+        print('Failed to find path to goal')
