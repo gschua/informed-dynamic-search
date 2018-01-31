@@ -32,9 +32,9 @@ class AStar:
 
         self.nodes = [
             {
-                'map': -1,
                 'max_steps': -1,
                 'parent': -1,
+                'parent_map': -1,
                 'steps': 0,
                 'total_cost': -1,
                 'visited': False,
@@ -53,6 +53,17 @@ class AStar:
 
     def set_threshold(self, threshold):
         self.threshold = threshold
+        if self.threshold == 0:
+            self.northern_threshold = -1
+            self.southern_threshold = self.node_count + 1
+            self.western_threshold = -1
+            self.eastern_threshold = self.xsize + 1
+        else:
+            padding = 10
+            self.northern_threshold = max((min(self.start_tuple[1], self.goal_tuple[1]) - padding) * self.xsize, -1)
+            self.southern_threshold = min((max(self.start_tuple[1], self.goal_tuple[1]) + padding) * self.xsize, self.node_count + 1)
+            self.western_threshold = max(min(self.start_tuple[0], self.goal_tuple[0]) - padding, -1)
+            self.eastern_threshold = min(max(self.start_tuple[0], self.goal_tuple[0]) + padding, self.xsize + 1)
 
     def get_heuristic_constant(self):
         sum = 0
@@ -70,22 +81,23 @@ class AStar:
 
         def north_exists():
             try:
-                return north > -1 and self.graph[north] <= self.threshold
+                #return north > -1 and self.graph[north] <= self.threshold
+                return north > self.northern_threshold and self.graph[north] <= self.threshold
             except:
                 return False
         def south_exists():
             try:
-                return south < self.node_count and self.graph[south] <= self.threshold
+                return south < self.southern_threshold and self.graph[south] <= self.threshold
             except:
                 return False
         def east_exists():
             try:
-                return east < self.node_count and main % self.xsize != self.xsize - 1 and self.graph[east] <= self.threshold
+                return main % self.xsize < self.eastern_threshold and east < self.node_count and main % self.xsize != self.xsize - 1 and self.graph[east] <= self.threshold
             except:
                 return False
         def west_exists():
             try:
-                return west > -1 and main % self.xsize != 0 and self.graph[west] <= self.threshold
+                return main % self.xsize > self.western_threshold and west > -1 and main % self.xsize != 0 and self.graph[west] <= self.threshold
             except:
                 return False
 
@@ -123,7 +135,6 @@ class AStar:
 
             priority, current = heapq.heappop(self.frontier)
             self.nodes[current]['visited'] = True
-            self.nodes[current]['map'] = map_number
 
             if current == self.goal_index:
                 break
@@ -138,6 +149,7 @@ class AStar:
 
                     self.nodes[next]['total_cost'] = new_cost
                     self.nodes[next]['parent'] = current
+                    self.nodes[next]['parent_map'] = map_number
                     self.nodes[next]['max_steps'] = self.nodes[current]['max_steps']
                     self.nodes[next]['steps'] = self.nodes[current]['steps'] + 1
                     priority = new_cost + self.heuristic(next)
@@ -153,15 +165,23 @@ class AStar:
         self.illustrate(map_number)
 
         # if total_cost is -1, goal was not reached
-        return self.final_path(), self.nodes[self.goal_index]['total_cost']
+        return self.final_path(map_number), self.nodes[self.goal_index]['total_cost']
 
-    def final_path(self):
+    def final_path(self, map_number):
 
         path = []
         idx = self.goal_index
+        parent_map = map_number
+
         while idx >= 0 and idx != self.start_index:
+            self.nodes[idx]['map'] = parent_map
+            parent_map = self.nodes[idx]['parent_map']
             path.append((idx, self.nodes[idx]))
             idx = self.nodes[idx]['parent']
+
+        self.nodes[idx]['map'] = parent_map
+        path.append((idx, self.nodes[idx]))
+
         return path
 
     def illustrate(self, map_number):
@@ -224,17 +244,21 @@ class DStar(AStar):
                 f.write('\n')
 
     def _d_star_search(self):
-    
+
+        visited_bonus = 1000000000
+
         for i, ggg in enumerate(self.graph_set):
 
             print('Map change to {}'.format(i + 3))
             self.set_graph(ggg)
 
             for n in range(self.node_count):
-                if self.nodes[n]['visited'] and self.graph[n] >= 0:
+                if self.nodes[n]['visited'] and self.graph[n] <= self.threshold:
                     self.nodes[n]['max_steps'] = self.nodes[n]['steps'] + self.max_steps_per_map
-                    priority = self.nodes[n]['total_cost'] + self.heuristic(n)
+                    #priority = self.nodes[n]['total_cost'] + self.heuristic(n) + visited_bonus
+                    priority = self.nodes[n]['total_cost'] + visited_bonus
                     heapq.heappush(self.frontier, (priority, n))
+                    self.frontier = [(0, self.start_index)]
 
             path, cost = self.a_star_search(i + 3)
             self.last_time = get_time(self.last_time)
@@ -246,10 +270,20 @@ class DStar(AStar):
 
     def d_star_search(self):
 
-        threshold = self.threshold_increment
+        # if not self.threshold_increment:
+            # self.set_threshold(self.max_cost + 1)
+            # self.set_threshold(0)
+            # self.reset()
+            # path, cost = self._d_star_search()
+            # if cost >= 0:
+                # self.write_path(path, cost)
+            # return
+
+        threshold = 0
         final_try = False
 
-        while threshold < self.max_cost:
+        #while threshold < self.max_cost:
+        while 1:
 
             print('Threshold set to {}'.format(threshold))
             self.set_threshold(threshold)
@@ -259,20 +293,24 @@ class DStar(AStar):
 
             if cost >= 0:
                 self.write_path(path, cost)
+                return
 
-                if not final_try and threshold + self.threshold_increment < self.max_cost:
-                    print('Try one more time with a higher threshold')
-                    final_try = True
-                    threshold += self.threshold_increment
-                    self.reset()
-                    continue
+                # if not final_try and threshold + self.threshold_increment < self.max_cost:
+                    # print('Try one more time with a higher threshold')
+                    # final_try = True
+                    # threshold += self.threshold_increment
+                    # self.reset()
+                    # continue
 
             if final_try:
                 if cost < 0:
                     print('Path not found with higher threshold')
                 return
+            if threshold > self.max_cost:
+                final_try = True
 
             print('Path not found, retrying with higher threshold')
+            self.threshold_increment = self.threshold_increment * 3
             threshold += self.threshold_increment
 
         print('Failed to find path to goal')
