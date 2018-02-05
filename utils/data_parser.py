@@ -1,31 +1,32 @@
-'''util to split data into easier to parse chunks'''
+'''util to split test and training data by model into smaller csv files'''
+import datetime
 import os
 import sys
 
-def write_to_file(data, file_count):
-    global new_file_name
-    global num_fill
-    nfn = new_file_name.format(str(file_count).zfill(num_fill))
-    with open(nfn, 'w') as g:
-        print(nfn)
-        g.write(''.join(data))
+def write_to_file(line, file):
+    with open(file, 'ab') as g:
+        g.write(line)
 
-file_path_long = sys.argv[1]
-line_count = int(sys.argv[2])
-num_fill = int(sys.argv[3])
-assert os.path.isfile(file_path_long)
+start_time = datetime.datetime.now().replace(microsecond=0)
+print('Time start: %s' % start_time)
 
-file_path_short, file_ext = os.path.splitext(file_path_long)
-new_file_name = file_path_short + '_{}' + file_ext
-file_count = 1
-data = []
+input_file_long = sys.argv[1]
+assert os.path.isfile(input_file_long)
 
-with open(file_path_long, 'r') as f:
+input_file_short, file_ext = os.path.splitext(input_file_long)
+count = 0
+new_files = []
+
+for i in range(1, 11):
+    new_files.append(input_file_short + '_model{}'.format(str(i).zfill(2)) + file_ext)
+
+with open(input_file_long, 'rb') as f:
+    f.seek(32, 1)    # skip the first row
     for line in f:
-        data.append(line)
-        if len(data) >= line_count:
-            write_to_file(data, file_count)
-            data = []
-            file_count += 1
-if data:
-    write_to_file(data, file_count)
+        write_to_file(line, new_files[count % 10])
+        count += 1
+
+end_time = datetime.datetime.now().replace(microsecond=0)
+print('Count: %s' % count)
+print('Time end: %s' % end_time)
+print('Time taken: %s' % (end_time - start_time))
