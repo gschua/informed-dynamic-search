@@ -1,11 +1,14 @@
-'''Splitter for Met Weather Data
+'''Parser for Met Weather Data
 
 Separates data into smaller csv files by date and model for easier parsing by
 other scripts. In the case of real data, it is only separated by date.
 Assumes that the data is grouped by date, then location, then model.
 Assumes that there is a header. The subfiles will not have a header.
+Changes the sorting of the locations from y than x to a x than y to maintain
+comptability with DStar.
 
-e.g. 
+Example:
+
 Date | Location | Model | Value
 1, 3 | 1, 1     | 1     | 999
 1, 3 | 1, 1     | 2     | 888
@@ -18,94 +21,104 @@ Date | Location | Model | Value
 1, 4 | 1, 1     | 1     | 999
 ...
 
+Becomes:
+
+file_1_3.csv
+Location | Value
+1, 1     | 999
+2, 1     | 888
+3, 1     | 777
+...
+99, 99   | 666
+...
+
+
 Expects 2 arguments:
 1. data type ('real', 'train', or 'test')
 2. name (NOT path) of input file
 '''
+
 import copy
 import datetime
-import os
 import sys
+from init import *
 
-###############################################################################
-# Const and Default declarations
+def wind_score(wind_speeds):
 
-data_types = ['real', 'train', 'test']
-root_dir = os.path.dirname(os.path.abspath(__file__))
-input_path = os.path.join(root_dir, 'data')
-output_path = os.path.join(root_dir, 'data_parsed')
+    '''Put scoring algorithm here'''
+    score = 0
+    for wind in wind_speeds:
+        if int(wind.split('.')[0]) >= 15:
+            score += 10
+        else:
+            score += 1
+    return score
 
-first_day = 1
-first_hour = 3
-last_hour = 21
-model_count = 10
 
-###############################################################################
-# Init
+def parse_graph(data, day, hour):
 
-data_type = sys.argv[1]
-input_file_name = sys.argv[2]
-input_file = os.path.join(input_path, input_file_name)
-assert os.path.isfile(input_file), '{} does not exist'.format(input_file)
-assert os.path.isdir(output_path), '{} does not exist'.format(output_path)
-assert data_type in data_types, 'Invalid data type: {}'.format(data_type)
+    # at this point, "data" has all the info for a particular day-hour combo
+    with open(get_file(day, hour), 'w') as f:
+        for coordinates in sorted(data.keys(), key=lambda x: (x[1], x[0])):
+            f.write('{x},{y},{v}\n'.format(
+                x=coordinates[0],
+                y=coordinates[1],
+                v=wind_score(data[coordinates])
+            ))
 
-# to avoid writing another script, we treat real data as though it has 1 model
-if data_type == 'real':
-    model_count = 1
+def parse_raw():
 
-if data_type == 'test':
-    first_day = 6
+    #data = [[] for i in range(model_count)]
+    data = {}
+    count = 0
+    day = copy.deepcopy(first_day)
+    hour = 0
 
-size = 548 * 421 * model_count
-output_format = data_type + '_d{d}h{h}m{m}.csv'
-data = [[] for i in range(model_count)]
+    with open(raw_file, 'r') as f:
 
-###############################################################################
-# Begin Splitting
+        for line in f:
 
-start_time = datetime.datetime.now().replace(microsecond=0)
-print('Time start: %s' % start_time)
+            count += 1
+            # ignore header
+            if count == 1:
+                continue
 
-count = 0
-day = copy.deepcopy(first_day)
-hour = copy.deepcopy(first_hour)
+            # -2 because of header, change to -1 if input file has no header
+            # current_model = (count-2) % model_count
 
-with open(input_file, 'r') as f:
+            a = line.split(',')
+            # convert x and y coordinates to int for numerical sorting
+            coordinates = (int(a[0]), int(a[1]))
+            wind = a[5]
+            # we wont get model because they will be appended to the list
+            # in order anyway
+           
+            if coordinates in data:
+                data[coordinates].append(wind)
+            else:
+                data[coordinates] = [wind]
 
-    for line in f:
+            if count % (size * model_count) == 1:
+                parse_graph(data, day, hour)
+                # reset or increment variables
+                #data = [[] for i in range(model_count)]
+                data = {}
+                hour += 1
+                if hour == (last_hour-first_hour):
+                    hour = 0
+                    day += 1
 
-        count += 1
-        # ignore header
-        if count == 1:
-            continue
 
-        # -2 because of header, change to -1 if input file has no header
-        current_model = (count-2) % model_count
-        data[current_model].append(line)
+if __name__ == '__main__':
 
-        if count % size == 1:
+    input_file_name = sys.argv[2]
+    raw_file = os.path.join(root_dir, 'data', input_file_name)
 
-            # at this point we have gathered all the data for a particular
-            # day-hour combo, so we write them all to files
-            for model in range(model_count):
-                output_file = os.path.join(output_path, output_format.format(
-                    d=str(day).zfill(2),
-                    h=str(hour).zfill(2),
-                    m=str(model+1).zfill(2)
-                ))
-                with open(output_file, 'w') as g:
-                    for d in data[model]:
-                        g.write(d)
+    start_time = datetime.datetime.now().replace(microsecond=0)
+    print('Time start: %s' % start_time)
 
-            # reset or increment variables
-            data = [[] for i in range(model_count)]
-            hour += 1
-            if hour == last_hour:
-                hour = copy.deepcopy(first_hour)
-                day += 1
+    parse_raw()
 
-end_time = datetime.datetime.now().replace(microsecond=0)
-print('Count: %s' % count)
-print('Time end: %s' % end_time)
-print('Time taken: %s' % (end_time - start_time))
+    end_time = datetime.datetime.now().replace(microsecond=0)
+    print('Time end: %s' % end_time)
+    print('Time taken: %s' % (end_time - start_time))
