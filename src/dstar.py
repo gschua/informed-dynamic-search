@@ -2,10 +2,12 @@
  - Tkinter GUI for map
  - Proper cost limit checking
  - Float support for costs/graphs
+ - test what if zero_index = True
 '''
 
 import copy
 import heapq
+import itertools
 import time
 import os
 import datetime
@@ -16,6 +18,7 @@ import pdb
 import winsound
 frequency = 2500  # Set Frequency To 2500 Hertz
 duration = 1000  # Set Duration To 1000 ms == 1 second
+
 
 def get_time(last_time, new_line=True):
 
@@ -30,12 +33,50 @@ def get_time(last_time, new_line=True):
     return now
 
 
+class PriorityQueue:
+
+    '''Implementation of extra functions required to extend heapq to a better
+    prioirty queue. Taken from https://docs.python.org/3.6/library/heapq.html#priority-queue-implementation-notes'''
+
+    # placeholder for a removed task
+    REMOVED = '<removed-item>'
+
+    def __init__(self):
+        # heap is a list of tuples of (priority, node index)
+        self.heap = []
+        self.indexer = {}
+        self.counter = itertools.count()
+
+    def len(self):
+        return len(self.indexer)
+
+    def has_node(self, node):
+        return node in self.indexer
+
+    def push(self, priority, item):
+        if item in self.indexer:
+            entry = self.indexer.pop(item)
+            entry[-1] = PriorityQueue.REMOVED
+        count = next(self.counter)
+        entry = [priority, count, item]
+        self.indexer[item] = entry
+        heapq.heappush(self.heap, entry)
+
+    def pop(self):
+        while self.heap:
+            priority, count, item = heapq.heappop(self.heap)
+            if item != PriorityQueue.REMOVED:
+                del self.indexer[item]
+                return item
+        return None
+
+
 class AStar:
 
     '''Subset of Graph, such that it is a graph whose edges are only with its
     4-adjacent neighbors'''
 
-    def __init__(self, xsize, ysize, start, goal, zero_index, limit_type=None, graph_output=None):
+    def __init__(self, xsize, ysize, start, goal, zero_index, heuristic_type, limit_type=None, graph_output=None):
         '''Args:
 
             xsize           int. Horizontal size of graph.
@@ -49,6 +90,12 @@ class AStar:
 
             zero_index      bool. States whether the graph's origin is at
                             (0, 0) (True) or (1, 1) (False)
+
+            heuristic_type  str. Dictates that heuristic algorithm to be used.
+                            Options:
+
+                "a"         A*
+                "d"         Dijkstra
 
             limit_type      str. Dictates that type of limit the traversal is
                             under if any. Options:
@@ -69,13 +116,21 @@ class AStar:
         self.start_tuple = start
         self.goal_tuple = goal
         self.zero_index = zero_index
+
+        if heuristic_type == 'a':
+            self.heuristic = self.astar_heuristic
+        elif heuristic_type == 'd':
+            self.heuristic = self.dijkstra_heuristic
+        else:
+            raise ValueError('heuristic_type must be either "a" or "d"')
+
         self.limit_type = limit_type
         assert limit_type == 'c' or limit_type == 'n' or not limit_type
 
         # check with arbitrary values if graph_output is valid now
         # instead of later after the seacrh is complete hehe
         self.graph_output = graph_output
-        if self.graph_output:
+        if graph_output:
             try:
                 test = graph_output.format(g=0, t=0)
             except:
@@ -85,7 +140,7 @@ class AStar:
         self.start_index = self.tuple_to_index(*start)
         self.goal_index = self.tuple_to_index(*goal)
         self.map_limit = -1
-        self.cost_threshold = None
+        self.cost_threshold = -1
 
     def reset(self):
 
@@ -138,25 +193,27 @@ class AStar:
         ]
 
         # init some parameters for the starting node
-        self.nodes[self.start_index]['total_cost'] = self.get_cost(
-            self.start_index, self.start_index)
-        self.nodes[self.start_index]['distance'] = 1
-        self.nodes[self.start_index]['map'] = self.graph_number
-        self.nodes[self.start_index]['real_distance'] = 1
-        self.nodes[self.start_index]['edge_cost'] = copy.deepcopy(
-            self.nodes[self.start_index]['total_cost'])
+        self.nodes[self.start_index].update({
+            'total_cost': self.get_cost(self.start_index, self.start_index),
+            'distance': 1,
+            'map': self.graph_number,
+            'real_distance': 1,
+            'edge_cost': self.get_cost(self.start_index, self.start_index),
+        })
 
-        self.frontier = [(0, self.start_index)]   # (priority, node)
+        self.frontier = PriorityQueue()
+        self.frontier.push(0, self.start_index)
 
-    def set_graph(self, graph, graph_number=1):
+    def set_graph(self, graph, graph_num=0):
         if len(graph) != self.node_count:
             raise ValueError(
                 'Expected graph to be of length {0}, got graph of length {1}'
-                .format(self.node_count, len(graph))
-            )
+                .format(self.node_count, len(graph)))
         self.graph = graph
-        self.graph_number = graph_number
-        self.heuristic_constant = self.get_heuristic_constant()
+        self.graph_number = graph_num
+        #self.heuristic_constant = self.get_heuristic_constant()
+        if self.cost_threshold < 0:
+            self.cost_threshold = max(self.graph) + 1
 
     def set_cost_threshold(self, cost_threshold):
         # since there may be some nodes whose costs are so high as to be
@@ -176,17 +233,20 @@ class AStar:
 
     def get_cost(self, current, next, graph=None):
         if not graph:
-            graph = self.graph
-        # to-do: try different formula
+            return self.graph[next]
         return graph[next]
 
-    def heuristic(self, node):
-        xcoor, ycoor = self.index_to_tuple(node)
+    def astar_heuristic(self, node):
         # to-do: try different formula
-        return (
-            (abs(self.goal_tuple[0] - xcoor) + abs(self.goal_tuple[1] - ycoor))
-            * self.heuristic_constant + self.nodes[node]['total_cost']
-        )
+        xcoor, ycoor = self.index_to_tuple(node)
+        return ((abs(self.goal_tuple[0] - xcoor) + abs(self.goal_tuple[1] - ycoor))
+            #* self.heuristic_constant + self.nodes[node]['total_cost'])
+            + self.nodes[node]['total_cost'])
+
+    def dijkstra_heuristic(self, node):
+        # decide to go with dijkstra because we dont want greedy search for
+        # limited step maps
+        return self.nodes[node]['total_cost']
 
     def tuple_to_index(self, xcoor, ycoor):
         #assert xcoor < self.xsize, 'Invalid x-coordinate: {}'.format(xcoor)
@@ -195,12 +255,10 @@ class AStar:
             #assert xcoor >= 0, 'Invalid x-coordinate: {}'.format(xcoor)
             #assert ycoor >= 0, 'Invalid y-coordinate: {}'.format(ycoor)
             return ycoor * self.xsize + xcoor
-            #return xcoor * self.ysize + ycoor
         else:
             #assert xcoor >= 1, 'Invalid x-coordinate: {}'.format(xcoor)
             #assert ycoor >= 1, 'Invalid y-coordinate: {}'.format(ycoor)
             return (ycoor-1) * self.xsize + (xcoor-1)
-            #return (xcoor-1) * self.ysize + (ycoor-1)
 
     def index_to_tuple(self, idx):
         #assert idx < self.node_count and idx >= 0, 'Invalid index: {}'.format(idx)
@@ -253,17 +311,6 @@ class AStar:
 
         return neighbors
 
-    #@profile
-    def pq_push(self, priority_queue, node):
-
-        priority = self.heuristic(node)
-        for n in priority_queue:
-            if n[1] == node:
-                n = (priority, node)
-                heapq.heapify(priority_queue)
-                return
-        heapq.heappush(priority_queue, (priority, node))
-
     def set_parent(self, parent, child):
 
         # assign the new parent's values
@@ -274,19 +321,24 @@ class AStar:
         self.nodes[child]['edge_cost'] = self.get_cost(parent, child)
         self.nodes[child]['real_distance'] = self.nodes[parent]['real_distance'] + 1
 
-    def astar_search(self):
+    def search(self):
 
         count = 0
-        while self.frontier:
+        while True:
 
-            priority, current = heapq.heappop(self.frontier)
+            current = self.frontier.pop()
+            # no more nodes to investigate
+            if current == None:
+                break
 
             count += 1
             self.nodes[current]['visited'] = True
+            #self.mini_illustrate(current)
 
             # finish if we find reach the goal
             if current == self.goal_index:
                 break
+
             # if we have reached the maximum number of nodes we can visit, we
             # will not investigate this node
             if self.limit_type == 'n' and self.nodes[current]['distance'] >= self.map_limit:
@@ -304,11 +356,12 @@ class AStar:
                 if self.nodes[next]['total_cost'] < 0 or self.nodes[next]['total_cost'] > new_cost:
                     # set new cost and map number
                     self.nodes[next]['total_cost'] = new_cost
-                    self.nodes[next]['map'] = self.graph_number
+                    self.nodes[next]['map'] = copy.deepcopy(self.graph_number)
                     # change next's parent to current
                     self.set_parent(current, next)
                     # update priority queue
-                    self.pq_push(self.frontier, next)
+                    priority = self.heuristic(next)
+                    self.frontier.push(priority, next)
 
         if self.graph_output:
             self.illustrate()
@@ -320,36 +373,59 @@ class AStar:
 
         path = []
         traversed = []
-        idx = self.goal_index
-        prev = None
+        current = self.goal_index
+        child = None
 
-        while idx >= 0 and idx != self.start_index:
+        while current >= 0:
             # check for cycles
-            if idx in traversed:
+            if current in traversed:
                 raise Exception('Cyclic path found!')
 
             # determine the map and edge cost of the current node at the time
             # this optimal path crosses it
-            if prev:
-                self.nodes[idx]['actual_map'] = self.nodes[prev]['parent_map']
-                self.nodes[idx]['actual_edge_cost'] = self.get_cost(idx, prev, self.graph_set[self.nodes[idx]['actual_map']-self.graph_num_start])
+            if child:
+                self.nodes[current]['actual_map'] = self.nodes[child]['parent_map']
+                self.nodes[current]['actual_edge_cost'] = self.get_cost(self.nodes[current]['parent'], current, self.graph_set[self.nodes[current]['actual_map']])
             else:
-                self.nodes[idx]['actual_map'] = self.graph_number
-                self.nodes[idx]['actual_edge_cost'] = self.get_cost(self.nodes[idx]['parent'], idx)
+                self.nodes[current]['actual_map'] = self.graph_number
+                self.nodes[current]['actual_edge_cost'] = self.get_cost(self.nodes[current]['parent'], current)
 
-            path.append((idx, self.nodes[idx]))
-            traversed.append(idx)
-            prev = copy.deepcopy(idx)
-            idx = self.nodes[idx]['parent']
+            path.append((current, self.nodes[current]))
+            traversed.append(current)
+            child = copy.deepcopy(current)
+            current = self.nodes[current]['parent']
 
-        # one more time or it won't include starting node
-        self.nodes[idx]['actual_map'] = self.nodes[prev]['parent_map']
-        self.nodes[idx]['actual_edge_cost'] = self.get_cost(idx, prev, self.graph_set[self.nodes[idx]['actual_map']-self.graph_num_start])
-        path.append((idx, self.nodes[idx]))
         # reverse list so it goes from start -> goal instead of goal -> start
         path.reverse()
 
         return path
+
+    def mini_illustrate(self, current):
+
+        os.system('cls')
+        row = 0
+        max = 61
+        for i in range(self.node_count):
+            xcoor, ycoor = self.index_to_tuple(i)
+            if xcoor < self.start_tuple[0] - 30 or xcoor > self.start_tuple[0] + 30 or ycoor < self.start_tuple[1] - 10 or ycoor > self.start_tuple[1] + 30:
+                continue
+            if i == self.start_index:
+                sys.stdout.write('o ')
+            elif i == self.goal_index:
+                sys.stdout.write('x ')
+            elif i == current:
+                sys.stdout.write('# ')
+            elif self.nodes[i]['visited']:
+                sys.stdout.write('+ ')
+            elif self.graph[i] > self.cost_threshold:
+                sys.stdout.write('( ')
+            else:
+                sys.stdout.write('. ')
+            row += 1
+            if row >= max:
+                row = 0
+                sys.stdout.write('\n')
+        x = input()
 
     def illustrate(self):
 
@@ -395,14 +471,13 @@ class DStar(AStar):
      - Trigger map change based on either cost or number of visited nodes.
     '''
 
-    def __init__(self, graph_set, max_cost, path_output, cost_threshold_list, map_limits, graph_num_start, *args, **kwargs):
+    def __init__(self, graph_set, max_cost, path_output, cost_threshold_list, map_limits, *args, **kwargs):
 
         super(DStar, self).__init__(*args, **kwargs)
 
         self.graph_set = graph_set
         self.max_cost = max_cost
         self.map_limits = map_limits
-        self.graph_num_start = graph_num_start
 
         # check with arbitrary values if path_output is valid now
         self.path_output = path_output
@@ -414,7 +489,7 @@ class DStar(AStar):
         if cost_threshold_list:
             self.cost_threshold_list = cost_threshold_list
         else:
-            self.cost_threshold_list = [max_cost]
+            self.cost_threshold_list = [max_cost + 1]
 
         self.last_time = datetime.datetime.now().replace(microsecond=0)
 
@@ -462,14 +537,6 @@ class DStar(AStar):
                     row = 0
                     f.write('\n')
 
-    def start_heuristic(self, node):
-        '''similar to AStar.heuristic() except it evaluates based on closeness
-        to start node'''
-        # who would win
-        # a fancy robust heuristic algorithm
-        # or sort by cost boi
-        return self.nodes[node]['total_cost']
-
     def get_wait_penalty(self, node):
 
         '''When comparing the cost of traversing a node between two maps, we
@@ -478,6 +545,7 @@ class DStar(AStar):
         we add a waiting penalty to all total_costs as later on they will be
         used for waiting vs moving.'''
         multiplier = 1
+        wait_penalty = 0
         if self.limit_type == 'n':
             return (self.map_limit - self.nodes[node]['distance']) * multiplier * (self.graph_number - self.nodes[node]['map'])
         else:
@@ -491,18 +559,19 @@ class DStar(AStar):
         # nodes, we check the new cost of traversing
 
         count = 0
-        reev_heap = []
+        reev_heap = PriorityQueue()
         reevaluated = [False for i in range(self.node_count)]
 
         for i in range(len(self.nodes)):
-            if self.nodes[i]['visited']:
-                self.pq_push(reev_heap, i)
+            if self.nodes[i]['visited'] and self.graph[i] < self.cost_threshold:
+                priority = self.heuristic(i)
+                reev_heap.push(priority, i)
 
-        while reev_heap:
+        while reev_heap.len():
 
-            priority, current = heapq.heappop(reev_heap)
+            current = reev_heap.pop()
 
-            if reevaluated[current]:
+            if not current or reevaluated[current]:
                 continue
 
             count += 1
@@ -514,13 +583,11 @@ class DStar(AStar):
                 self.get_wait_penalty(current)
             )
 
-            # if current == 131733 and self.graph_number == 9:
-                # pdb.set_trace()
-
             if self.nodes[current]['total_cost'] > new_cost:
                 self.nodes[current]['total_cost'] = new_cost
                 self.nodes[current]['edge_cost'] = self.graph[current]
                 self.nodes[current]['map'] = self.graph_number
+            self.nodes[current]['distance'] = 1
 
             for next in self.get_neighbors(current):
 
@@ -528,10 +595,6 @@ class DStar(AStar):
                     next in self.nodes[current]['parents'] or
                     self.graph[next] > self.cost_threshold):
                     continue
-
-                # if next in range(139943, 139946) and self.graph_number == 9:
-                    # winsound.Beep(frequency, duration)
-                    # pdb.set_trace()
 
                 new_next_cost = self.nodes[current]['total_cost'] + self.get_cost(current, next)
                 # if self.limit_type == 'c' and self.map_limit <= new_next_cost:
@@ -545,47 +608,45 @@ class DStar(AStar):
                 # have to put it outside the previous if statement since it is
                 # possible for current node's cost to not lower but next's
                 # cost will anyway
+                priority = self.heuristic(next)
                 if self.nodes[next]['visited']:
-                    self.pq_push(reev_heap, next)
+                    reev_heap.push(priority, next)
                 else:
                     # do NOT add a node if it we already reached the edge and
                     # it is not a new node
                     if self.limit_type == 'n' and self.nodes[current]['distance'] >= self.map_limit:
                         pass
                     else:
-                        self.pq_push(self.frontier, next)
-
-            # if current == 131733 and self.graph_number == 9:
-                # winsound.Beep(frequency, duration)
-                # pdb.set_trace()
+                        self.frontier.push(priority, next)
 
         # reset distance for later wait penalty computation
-        for node in self.nodes:
-            node['distance'] = 0
+        for idx in range(self.node_count):
+            if self.nodes[idx]['visited'] and not self.frontier.has_node(idx):
+                self.nodes[idx]['distance'] = 1
 
         print('Re-evaluated {} nodes'.format(count), end=', ', flush=True)
 
-    def dstar_search(self):
+    def dynamic_search(self):
 
         for cost_threshold in sorted(self.cost_threshold_list):
 
             print('\nThreshold set to {}'.format(cost_threshold))
             self.set_cost_threshold(cost_threshold)
 
-            for graph_num, this_graph in enumerate(self.graph_set, self.graph_num_start):
+            for graph_num, this_graph in enumerate(self.graph_set):
 
                 print('Map change to {}'.format(graph_num), end=', ', flush=True)
                 self.set_graph(this_graph, graph_num)
-                self.set_map_limit(self.map_limits[graph_num - self.graph_num_start])
+                self.set_map_limit(self.map_limits[graph_num])
 
-                if graph_num > self.graph_num_start:
+                if graph_num > 0:
                     self.reevaluate()
                     self.last_time = get_time(self.last_time, new_line=False)
                 else:
                     self.reset()
 
                 print('Performing A* Search', end=', ', flush=True)
-                path, cost = self.astar_search()
+                path, cost = self.search()
                 self.last_time = get_time(self.last_time)
 
                 if cost >= 0:
