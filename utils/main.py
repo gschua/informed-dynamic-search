@@ -1,7 +1,7 @@
 import array
 import datetime
 import sys
-from dstar import DStar
+from dynamic_search import DynamicSearch
 from init import *
 
 def get_time(last_time):
@@ -17,6 +17,7 @@ def get_graph(day):
         with open(get_file(day, hour), 'r') as f:
             for i, line in enumerate(f):
                 data[hour][i] = int(line.split(',')[-1])
+                #data[hour][i] = 0
     return data
 
 if __name__ == '__main__':
@@ -32,9 +33,8 @@ if __name__ == '__main__':
 
         print('\n---------------------------------\n')
         print('Day {}, City {}'.format(day, city))
-        ds = DStar(
+        ds = DynamicSearch(
             graph_set,
-            max_cost,
             dstar_path_output_format.format(d=str(day).zfill(2), c=str(city).zfill(2)),
             cost_threshold_list,
             map_limits,

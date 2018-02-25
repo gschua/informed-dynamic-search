@@ -3,6 +3,7 @@
  - Proper cost limit checking
  - Float support for costs/graphs
  - test what if zero_index = True
+ - goes nuts with 0 cost edges
 '''
 
 import copy
@@ -20,16 +21,11 @@ frequency = 2500  # Set Frequency To 2500 Hertz
 duration = 1000  # Set Duration To 1000 ms == 1 second
 
 
-def get_time(last_time, new_line=True):
-
+def get_time(last_time):
     def clean(t):
         return t.strftime('%H:%M:%S')
-
     now = datetime.datetime.now().replace(microsecond=0)
-    if new_line:
-        print('Took {}'.format(now-last_time))
-    else:
-        print('Took {}'.format(now-last_time), end=', ', flush=True)
+    print('Took {}'.format(now-last_time))
     return now
 
 
@@ -71,10 +67,14 @@ class PriorityQueue:
         return None
 
 
-class AStar:
+class Search:
 
-    '''Subset of Graph, such that it is a graph whose edges are only with its
-    4-adjacent neighbors'''
+    '''Assumptions:
+     - each node in the graph has edges only with its 4-adjacent neighbors
+     - the cost of going from a node A to a node B is the the same regardless
+       of A. B is the only factor in cost.
+    presumably it is trivial to extend this function to general graphs but maybe some other time
+    '''
 
     def __init__(self, xsize, ysize, start, goal, zero_index, heuristic_type, limit_type=None, graph_output=None):
         '''Args:
@@ -173,8 +173,6 @@ class AStar:
                     current node was crossed.
         parents     list of int. A list of ancestors of the current node.
                     Required to avoid getting into cycles.
-
-        real_distance
         '''
 
         self.nodes = [
@@ -183,34 +181,25 @@ class AStar:
                 'visited': False,
                 'parent': -1,
                 'distance': -1,
-
-                'map': -1,
-                'real_distance': -1,
-                'parent_map': -1,
-                'edge_cost': -1,
-                'parents': [],
             } for i in range(self.node_count)
         ]
 
         # init some parameters for the starting node
         self.nodes[self.start_index].update({
             'total_cost': self.get_cost(self.start_index, self.start_index),
-            'distance': 1,
-            'map': self.graph_number,
-            'real_distance': 1,
-            'edge_cost': self.get_cost(self.start_index, self.start_index),
+            # i have no idea why but limit doesnt work for the first map unless we set start distance to 2
+            'distance': 0,
         })
 
         self.frontier = PriorityQueue()
         self.frontier.push(0, self.start_index)
 
-    def set_graph(self, graph, graph_num=0):
+    def set_graph(self, graph):
         if len(graph) != self.node_count:
             raise ValueError(
                 'Expected graph to be of length {0}, got graph of length {1}'
                 .format(self.node_count, len(graph)))
         self.graph = graph
-        self.graph_number = graph_num
         #self.heuristic_constant = self.get_heuristic_constant()
         if self.cost_threshold < 0:
             self.cost_threshold = max(self.graph) + 1
@@ -311,19 +300,18 @@ class AStar:
 
         return neighbors
 
-    def set_parent(self, parent, child):
+    def set_node(self, parent, child, new_cost):
 
         # assign the new parent's values
+        self.nodes[child]['total_cost'] = new_cost
         self.nodes[child]['parent'] = parent
-        self.nodes[child]['parents'] = self.nodes[parent]['parents'] + [parent]
-        self.nodes[child]['parent_map'] = copy.deepcopy(self.nodes[parent]['map'])
         self.nodes[child]['distance'] = self.nodes[parent]['distance'] + 1
-        self.nodes[child]['edge_cost'] = self.get_cost(parent, child)
-        self.nodes[child]['real_distance'] = self.nodes[parent]['real_distance'] + 1
 
     def search(self):
 
         count = 0
+        found = False
+
         while True:
 
             current = self.frontier.pop()
@@ -337,37 +325,34 @@ class AStar:
 
             # finish if we find reach the goal
             if current == self.goal_index:
+                found = True
                 break
-
-            # if we have reached the maximum number of nodes we can visit, we
-            # will not investigate this node
+            # reached max visitable number of nodes
             if self.limit_type == 'n' and self.nodes[current]['distance'] >= self.map_limit:
                 continue
 
             for next in self.get_neighbors(current):
 
-                # if we already visited the node or it is above cost therehsold
-                if self.nodes[next]['visited'] or self.graph[next] > self.cost_threshold:
+                    # node is closed
+                if (self.nodes[next]['visited'] or
+                    # neighbor is an obstacle, not node
+                    self.graph[next] > self.cost_threshold):
                     continue
 
                 new_cost = self.nodes[current]['total_cost'] + self.get_cost(current, next)
                 # if self.limit_type == 'c' and self.map_limit <= new_cost:
                     # continue
                 if self.nodes[next]['total_cost'] < 0 or self.nodes[next]['total_cost'] > new_cost:
-                    # set new cost and map number
-                    self.nodes[next]['total_cost'] = new_cost
-                    self.nodes[next]['map'] = copy.deepcopy(self.graph_number)
-                    # change next's parent to current
-                    self.set_parent(current, next)
+                    # set new node values
+                    self.set_node(current, next, new_cost)
                     # update priority queue
-                    priority = self.heuristic(next)
-                    self.frontier.push(priority, next)
+                    self.frontier.push(self.heuristic(next), next)
 
         if self.graph_output:
             self.illustrate()
 
-        print('Searched {} nodes'.format(count), end=', ', flush=True)
-        return self.final_path(), self.nodes[self.goal_index]['total_cost']
+        print('Searched {} nodes'.format(count))
+        return found
 
     def final_path(self):
 
@@ -379,25 +364,16 @@ class AStar:
         while current >= 0:
             # check for cycles
             if current in traversed:
+                pdb.set_trace()
                 raise Exception('Cyclic path found!')
-
-            # determine the map and edge cost of the current node at the time
-            # this optimal path crosses it
-            if child:
-                self.nodes[current]['actual_map'] = self.nodes[child]['parent_map']
-                self.nodes[current]['actual_edge_cost'] = self.get_cost(self.nodes[current]['parent'], current, self.graph_set[self.nodes[current]['actual_map']])
-            else:
-                self.nodes[current]['actual_map'] = self.graph_number
-                self.nodes[current]['actual_edge_cost'] = self.get_cost(self.nodes[current]['parent'], current)
 
             path.append((current, self.nodes[current]))
             traversed.append(current)
-            child = copy.deepcopy(current)
+            child = current
             current = self.nodes[current]['parent']
 
         # reverse list so it goes from start -> goal instead of goal -> start
         path.reverse()
-
         return path
 
     def mini_illustrate(self, current):
@@ -453,11 +429,11 @@ class AStar:
                     row = 0
                     f.write('\n')
 
-class DStar(AStar):
+class DynamicSearch(Search):
 
     '''
-    Although called DStar, this implementation is quite different from the
-    traditional D* problem in that
+    Although originally called DStar, this implementation is quite different
+    from the traditional D* problem in that
 
     1. it deals with known graph changes rather than incomplete information and
     2. it expects some form of distance or cost limitation to be reached before
@@ -471,12 +447,11 @@ class DStar(AStar):
      - Trigger map change based on either cost or number of visited nodes.
     '''
 
-    def __init__(self, graph_set, max_cost, path_output, cost_threshold_list, map_limits, *args, **kwargs):
+    def __init__(self, graph_set, path_output, cost_threshold_list, map_limits, *args, **kwargs):
 
         super(DStar, self).__init__(*args, **kwargs)
 
         self.graph_set = graph_set
-        self.max_cost = max_cost
         self.map_limits = map_limits
 
         # check with arbitrary values if path_output is valid now
@@ -485,13 +460,52 @@ class DStar(AStar):
             test = path_output.format(t=0)
         except:
             raise Exception('Expecting a string for formatting with parameter t')
-
         if cost_threshold_list:
             self.cost_threshold_list = cost_threshold_list
         else:
-            self.cost_threshold_list = [max_cost + 1]
+            self.cost_threshold_list = [self.max_cost + 1]
 
+        self.max_cost = max(max(g) for g in graph_set)
         self.last_time = datetime.datetime.now().replace(microsecond=0)
+
+    def reset(self):
+
+        super(DStar, self).reset()
+        self.dnodes[self.graph_number][self.start_index] = {
+            'total_cost': self.get_cost(self.start_index, self.start_index),
+            'distance': 0,
+            'parent': -1,
+            'parent_map': -1,
+            'ancestors': [],
+        }
+
+    def set_node(self, parent, child, new_cost):
+
+        super(DStar, self).set_node(parent, child, new_cost)
+        #parent_info = self.dnodes[self.nodes[parent]['map']][parent]
+        parent_info = self.dnodes[self.graph_number][parent]
+        self.dnodes[self.graph_number][child] = {
+            'total_cost': new_cost,
+            'distance': parent_info['distance'] + 1,
+            'parent': self.nodes[child]['parent'],
+            #'parent_map': self.nodes[parent]['map'],
+            'parent_map': self.graph_number,
+            'ancestors': parent_info['ancestors'] + [parent],
+        }
+
+    def astar_heuristic(self, node, graph_number=None):
+        if graph_number == None:
+            graph_number = self.graph_number
+        xcoor, ycoor = self.index_to_tuple(node)
+        return ((abs(self.goal_tuple[0] - xcoor) + abs(self.goal_tuple[1] - ycoor))
+            + self.dnodes[graph_number][node]['total_cost'])
+
+    def dijkstra_heuristic(self, node, graph_number=None):
+        # decide to go with dijkstra because we dont want greedy search for
+        # limited step maps
+        if graph_number == None:
+            graph_number = self.graph_number
+        return self.dnodes[graph_number][node]['total_cost']
 
     def write_path(self, path, cost):
 
@@ -502,23 +516,22 @@ class DStar(AStar):
 
             f.write('Cost: {}\n'.format(cost))
             f.write('Threshold: {}/{}\n'.format(self.cost_threshold, self.max_cost))
-            f.write('index,xcoor,ycoor,map,edge_cost,total_cost,parent,distance,a\n')
+            f.write('index,xcoor,ycoor,map,cost,total_cost,parent,distance\n')
 
-            for idx, node_info in path:
-                xcoor, ycoor = self.index_to_tuple(idx)
+            for node_info in path:
+                xcoor, ycoor = self.index_to_tuple(node_info['index'])
                 f.write(','.join((
-                    str(idx),
+                    str(node_info['index']),
                     str(xcoor),
                     str(ycoor),
-                    str(node_info['actual_map']),
-                    str(node_info['actual_edge_cost']),
+                    str(node_info['map']),
+                    str(node_info['cost']),
                     str(node_info['total_cost']),
                     str(node_info['parent']),
-                    str(node_info['real_distance']),
-                    str(node_info['distance'])
+                    str(node_info['distance']),
                 )))
                 f.write('\n')
-                idx_list.append(idx)
+                idx_list.append(node_info['index'])
 
         output_file = '{0}_{2}.{1}'.format(*output_file.rsplit('.', 1), 'graph')
         with open(output_file, 'w') as f:
@@ -543,14 +556,13 @@ class DStar(AStar):
         need to take into consideration a penalty for waiting for a map change
         instead of taking the extra cost of a less favorable map layout. Thus,
         we add a waiting penalty to all total_costs as later on they will be
-        used for waiting vs moving.'''
-        multiplier = 1
-        wait_penalty = 0
-        if self.limit_type == 'n':
-            return (self.map_limit - self.nodes[node]['distance']) * multiplier * (self.graph_number - self.nodes[node]['map'])
-        else:
-            # lol idk work on this if you have an example of cost limited maps
-            return multiplier
+        used for waiting vs moving cost comparison.'''
+
+        # Map limit in prev map - number of nodes traversed in previous map = number of steps spent waiting at a node
+        # number of steps spent waiting at a node * cost of waiting once in the previous map = total cost of waiting N steps at a node
+        # total cost of waiting N steps at a node + cost of being in the new node = total wait penalty
+        prev_map = self.graph_number - 1
+        return (self.map_limits[prev_map] - self.nodes[node]['distance']) * self.graph_set[prev_map][node]
 
     #@profile
     def reevaluate(self):
@@ -560,71 +572,122 @@ class DStar(AStar):
 
         count = 0
         reev_heap = PriorityQueue()
-        reevaluated = [False for i in range(self.node_count)]
+        reevaluated = []
+        waiting_cost = []
 
+        # init reev_heap, reevaluated, and waiting_cost
         for i in range(len(self.nodes)):
-            if self.nodes[i]['visited'] and self.graph[i] < self.cost_threshold:
-                priority = self.heuristic(i)
-                reev_heap.push(priority, i)
+            reevaluated.append(False)
+            if self.nodes[i]['visited']:
+                reev_heap.push(self.heuristic(i, self.graph_number-1), i)
+                waiting_cost.append(self.dnodes[self.graph_number-1][i]['total_cost'] + self.get_wait_penalty(i))
+            else:
+                waiting_cost.append(-1)
 
-        while reev_heap.len():
+        while True:
 
             current = reev_heap.pop()
-
-            if not current or reevaluated[current]:
+            # reev_heap is empty
+            if current == None:
+                break
+            # node is closed
+            if reevaluated[current]:
                 continue
+            '''
+            # parent not yet evaluated
+            # shove current back into queue with the parent's prioirity
+            ancestor = self.nodes[current]['parent']
+            for parent in reversed(self.nodes[current]['parents']):
+                if not reevaluated[parent]:
+                    reev_heap.push(self.heuristic(parent), current)
+                    continue
+            '''
 
             count += 1
             reevaluated[current] = True
-            new_cost = (
-                self.nodes[current]['total_cost'] -
-                self.nodes[current]['edge_cost'] +
-                self.graph[current] +
-                self.get_wait_penalty(current)
-            )
+            new_cost = waiting_cost[current]
 
-            if self.nodes[current]['total_cost'] > new_cost:
-                self.nodes[current]['total_cost'] = new_cost
-                self.nodes[current]['edge_cost'] = self.graph[current]
-                self.nodes[current]['map'] = self.graph_number
-            self.nodes[current]['distance'] = 1
+            # old_cost can either be
+            if current in self.dnodes[self.graph_number]:
+                # total_cost of a new more optimal parent than the one found in AStar.search()
+                old_cost = self.dnodes[self.graph_number][current]['total_cost']
+                parent_map = self.graph_number
+            else:
+                #self.dnodes[self.graph_number][current] = {}
+                # total_cost calculated in the most recent iteration of AStar.search()
+                old_cost = self.dnodes[self.graph_number-1][current]['total_cost']
+                self.dnodes[self.graph_number][current] = copy.deepcopy(self.dnodes[self.graph_number-1][current])
+                # we know change it to what it would be with an added wait penalty
+                #self.dnodes[self.graph_number][current]['total_cost'] = new_cost
+                parent_map = self.dnodes[self.graph_number-1][current]['parent_map']
+
+            if parent_map < self.graph_number or new_cost < old_cost:
+                # 3 scenarios:
+                # 1. "current" is the start node
+                # 2. None of "current"'s ancestors have a lower cost in the new map
+                # 3. It is more efficient for "current" to wait than to come from its parent
+                # 
+                # now total_cost is the cost if we waited until right before
+                # the map change
+                # altho technically this node is still in the previous map
+                # rather than current map, we set this to current map for
+                # set_node() later
+                self.dnodes[self.graph_number][current]['total_cost'] = new_cost
+                self.nodes[current]['distance'] = 0
+
+            # have hit max step limit
+            if self.limit_type == 'n' and self.map_limit <= self.nodes[current]['distance']: continue
 
             for next in self.get_neighbors(current):
 
+                    # node is closed
                 if (reevaluated[next] or
-                    next in self.nodes[current]['parents'] or
-                    self.graph[next] > self.cost_threshold):
+                    # neighbor is an obstacle, not node
+                    self.graph[next] > self.cost_threshold or
+                    # cycle detected
+                    next in self.dnodes[self.graph_number][current]['ancestors']):
                     continue
 
                 new_next_cost = self.nodes[current]['total_cost'] + self.get_cost(current, next)
-                # if self.limit_type == 'c' and self.map_limit <= new_next_cost:
-                    # continue
-
-                if self.nodes[next]['total_cost'] < 0 or self.nodes[next]['total_cost'] > new_next_cost:
-                    self.nodes[next]['total_cost'] = new_next_cost
-                    self.nodes[next]['map'] = self.graph_number
-                    self.set_parent(current, next)
-
-                # have to put it outside the previous if statement since it is
-                # possible for current node's cost to not lower but next's
-                # cost will anyway
-                priority = self.heuristic(next)
-                if self.nodes[next]['visited']:
-                    reev_heap.push(priority, next)
-                else:
-                    # do NOT add a node if it we already reached the edge and
-                    # it is not a new node
-                    if self.limit_type == 'n' and self.nodes[current]['distance'] >= self.map_limit:
-                        pass
+                # if self.limit_type == 'c' and self.map_limit <= new_next_cost: continue
+                if not next in self.dnodes[self.graph_number] or self.dnodes[self.graph_number][next]['total_cost'] > new_next_cost:
+                    self.set_node(current, next, new_next_cost)
+                    if self.nodes[next]['visited']:
+                        reev_heap.push(self.heuristic(next), next)
                     else:
-                        self.frontier.push(priority, next)
-
-        # reset distance for later wait penalty computation
-        for idx in range(self.node_count):
-            if self.nodes[idx]['visited'] and not self.frontier.has_node(idx):
-                self.nodes[idx]['distance'] = 1
+                        self.frontier.push(self.heuristic(next), next)
 
         print('Re-evaluated {} nodes'.format(count), end=', ', flush=True)
+
+    def final_path(self):
+
+        path = []
+        traversed = []
+        node = self.goal_index
+        map = self.graph_number
+
+        while node >= 0:
+
+            # check for cycles
+            if node in traversed:
+                pdb.set_trace()
+                raise Exception('Cyclic path found!')
+
+            path.append({
+                'index': node,
+                'map': map,
+                'cost': self.graph_set[map][node],
+                'total_cost': self.dnodes[map][node]['total_cost'],
+                'parent': self.dnodes[map][node]['parent'],
+                'parent_map': self.dnodes[map][node]['parent_map'],
+                'distance': self.dnodes[map][node]['distance'],
+            })
+            node = path[-1]['parent']
+            map = path[-1]['parent_map']
+
+        # reverse list so it goes from start -> goal instead of goal -> start
+        path.reverse()
+        return path, path[-1]['total_cost']
 
     def dynamic_search(self):
 
@@ -632,27 +695,31 @@ class DStar(AStar):
 
             print('\nThreshold set to {}'.format(cost_threshold))
             self.set_cost_threshold(cost_threshold)
+            self.dnodes = {}
+            # dnodes[map_number][node_index] = {total_cost, distance, parent, parent's map, ancestors}
 
-            for graph_num, this_graph in enumerate(self.graph_set):
+            for graph_number, this_graph in enumerate(self.graph_set):
 
-                print('Map change to {}'.format(graph_num), end=', ', flush=True)
-                self.set_graph(this_graph, graph_num)
-                self.set_map_limit(self.map_limits[graph_num])
+                print('Map change to {}'.format(graph_number), end=', ', flush=True)
+                self.graph_number = graph_number
+                self.set_graph(this_graph)
+                self.set_map_limit(self.map_limits[graph_number])
+                self.dnodes[graph_number] = {}
 
-                if graph_num > 0:
+                if graph_number > 0:
                     self.reevaluate()
-                    self.last_time = get_time(self.last_time, new_line=False)
                 else:
                     self.reset()
 
                 print('Performing A* Search', end=', ', flush=True)
-                path, cost = self.search()
-                self.last_time = get_time(self.last_time)
+                goal_reached = self.search()
 
-                if cost >= 0:
+                if goal_reached:
+                    path, cost = self.final_path()
                     self.write_path(path, cost)
                     return
 
+            self.last_time = get_time(self.last_time)
             print('Path not found, retrying with higher threshold')
 
         print('\nFailed to find path to goal')
